@@ -15,6 +15,7 @@ import (
 
 	"github.com/netchx/netch-go/internal/config"
 	"github.com/netchx/netch-go/internal/connlog"
+	"github.com/netchx/netch-go/internal/health"
 	"github.com/netchx/netch-go/internal/logx"
 	"github.com/netchx/netch-go/internal/outbound"
 	"github.com/netchx/netch-go/internal/proxy"
@@ -28,6 +29,7 @@ type serverModel struct {
 	walk.TableModelBase
 	items   []config.Server
 	latency map[string]string
+	health  map[string]health.Status
 }
 
 func (m *serverModel) RowCount() int { return len(m.items) }
@@ -55,6 +57,16 @@ func (m *serverModel) Value(row, col int) any {
 			}
 		}
 		return "-"
+	case 6:
+		if m.health != nil {
+			if st, ok := m.health[s.Name]; ok {
+				if st.OK {
+					return "up"
+				}
+				return "down"
+			}
+		}
+		return "-"
 	}
 	return ""
 }
@@ -62,6 +74,7 @@ func (m *serverModel) Value(row, col int) any {
 func (m *serverModel) Reset(items []config.Server) {
 	m.items = items
 	m.latency = make(map[string]string, len(items))
+	m.health = make(map[string]health.Status, len(items))
 	m.PublishRowsReset()
 }
 
@@ -71,6 +84,16 @@ func (m *serverModel) setLatency(name, v string) {
 	}
 	m.latency[name] = v
 	m.PublishRowChanged(m.index(name))
+}
+
+func (m *serverModel) setHealth(list []health.Status) {
+	if m.health == nil {
+		m.health = make(map[string]health.Status)
+	}
+	for _, st := range list {
+		m.health[st.Name] = st
+	}
+	m.PublishRowsReset()
 }
 
 func (m *serverModel) index(name string) int {
@@ -179,6 +202,7 @@ func Run(cfgPath string, cfg config.Config) error {
 					{Title: "Port", Width: 80},
 					{Title: "SNI", Width: 140},
 					{Title: "Latency", Width: 80},
+					{Title: "Status", Width: 70},
 				},
 				OnCurrentIndexChanged: func() {},
 			},
@@ -227,6 +251,10 @@ func Run(cfgPath string, cfg config.Config) error {
 
 	a.model.Reset(cfg.Servers)
 	go a.pumpLogs()
+
+	go health.Monitor(context.Background(), cfg.Servers, 60*time.Second, 5*time.Second, func(list []health.Status) {
+		a.mw.Synchronize(func() { a.model.setHealth(list) })
+	})
 
 	go tray.Run("Netch", tray.Hooks{
 		Show: func() {

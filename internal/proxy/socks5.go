@@ -202,7 +202,7 @@ func (s *Socks5) handle(ctx context.Context, c net.Conn) {
 	if s.Route != nil {
 		up, action, err = s.Route(dctx, "tcp", target)
 	} else {
-		up, err = s.dialer()(dctx, "tcp", target)
+		up, err = dialWithRetry(dctx, s.dialer(), "tcp", target, DefaultRetry)
 	}
 	if err != nil {
 		failErr = err
