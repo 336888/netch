@@ -1,0 +1,7 @@
+/netch
+/netch-gui.exe
+/bin/
+*.exe
+*.log
+.gopath/
+config.json
