@@ -5,3 +5,5 @@
 *.log
 .gopath/
 config.json
+dist/
+cmd/netch/rsrc_windows_amd64.syso
