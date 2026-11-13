@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"runtime"
 	"syscall"
 	"time"
@@ -43,6 +44,7 @@ func main() {
 		listOnly = flag.Bool("list", false, "print parsed servers and exit")
 		sysOn   = flag.Bool("sysproxy", false, "point the OS proxy at the local listener while running")
 		logFmt  = flag.String("log-format", "text", "connection log format: text|json")
+		subEvery = flag.Duration("sub-interval", 6*time.Hour, "subscription auto-refresh interval (0 disables)")
 	)
 	flag.Parse()
 
@@ -71,13 +73,13 @@ func main() {
 		return
 	}
 
-	if err := run(*cfgPath, *mode, *server, *level, *subSrc, *sysOn, *logFmt); err != nil {
+	if err := run(*cfgPath, *mode, *server, *level, *subSrc, *sysOn, *logFmt, *subEvery); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
 	}
 }
 
-func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sysOn bool, logFmt string) error {
+func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sysOn bool, logFmt string, subEvery time.Duration) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -117,6 +119,12 @@ func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sy
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if subSrc != "" && subEvery > 0 {
+		go sub.AutoRefresh(ctx, subSrc, subEvery, 30*time.Second, logger, func(list []config.Server) {
+			logger.Info("subscription updated", "servers", len(list))
+		})
+	}
 
 	if sysOn {
 		ep := sysproxy.Endpoint{HTTP: cfg.Local.HTTPAddr, Socks: cfg.Local.SocksAddr}
@@ -164,8 +172,8 @@ func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sy
 		})
 	}
 
-	// build the rule matcher
-	var matcher *rule.Matcher
+	// build the rule matcher; hot reload keeps it current
+	var matcherPtr atomic.Pointer[rule.Matcher]
 	if cfg.Rules.Enabled {
 		rules := rule.Default()
 		if cfg.Rules.File != "" {
@@ -180,8 +188,14 @@ func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sy
 		if merr != nil {
 			return merr
 		}
-		matcher = m
-		logger.Info("rules loaded", "count", matcher.Len())
+		matcherPtr.Store(m)
+		logger.Info("rules loaded", "count", m.Len())
+
+		if cfg.Rules.File != "" {
+			go rule.Watch(ctx, cfg.Rules.File, logger, func(nm *rule.Matcher) {
+				matcherPtr.Store(nm)
+			})
+		}
 	}
 
 	// local DNS server resolves through the upstream
@@ -203,6 +217,7 @@ func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sy
 	}
 
 	routeFn := func(ctx context.Context, network, addr string) (net.Conn, string, error) {
+		matcher := matcherPtr.Load()
 		if matcher == nil {
 			c, err := upstream.DialContext(ctx, network, addr)
 			return c, "proxy", err

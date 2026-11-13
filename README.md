@@ -21,12 +21,18 @@ for wire formats that already have solid Go implementations.
 | Subscription parsing (`ss://` `vmess://` `vless://` `trojan://` `socks5://` `http://`) | done |
 | TUN mode (sing-tun + gVisor) | done, `-tags with_gvisor` |
 | Process mode (Linux nftables redirect) | done |
-| Process mode (Windows) | partial - see below |
+| Process mode (Windows, WinDivert) | done - needs WinDivert.dll |
 | Local DNS server with cache | done |
 | Rule-based routing (domain / IP / process / port) | done |
 | System proxy (Windows / macOS / Linux) | done |
 | Real-time connection log (text / JSON) | done |
 | GUI (Walk, native Windows controls) | done |
+| System tray with show/start/stop/quit | done |
+| Latency test column | done |
+| Connection detail table | done |
+| Settings dialog | done |
+| Rule file hot reload | done |
+| Subscription auto-refresh | done |
 | Cross-build 6 platforms | done |
 
 ## Build
@@ -203,6 +209,24 @@ internal/sysproxy/    OS proxy toggle
 internal/gui/         Walk main window (windows build tag)
 ```
 
+## Windows Process mode
+
+Two paths exist:
+
+1. **WinDivert** (`internal/processmode`) — drops or passes packets per process
+   based on the rule matcher. Transparent proxying is not possible here: that
+   needs a user-mode TCP stack.
+2. **TUN** — full tunnelling, use this when you need every connection proxied.
+
+WinDivert requires two files next to the executable:
+
+```
+WinDivert.dll
+WinDivert64.sys
+```
+
+Download from https://github.com/basil00/WinDivert/releases (extract `x64/`).
+
 ## Windows process routing
 
 The PID lookup layer (`internal/procmap`) is implemented:
@@ -222,7 +246,7 @@ therefore needs one of:
 
 ## Roadmap
 
-- WinDivert process interception on Windows (procmap is ready)
+- Transparent proxy on top of WinDivert (needs gVisor in user space)
 - Rule file hot reload
 - GeoIP rule type
 - Server latency test in the GUI

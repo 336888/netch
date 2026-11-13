@@ -10,6 +10,7 @@ require (
 	github.com/sagernet/sing-shadowsocks v0.2.9
 	github.com/sagernet/sing-tun v0.9.6
 	github.com/sagernet/sing-vmess v0.2.8
+	github.com/williamfhe/godivert v0.0.0-20181229124620-a48c5b872c73
 	golang.org/x/sys v0.47.0
 )
 
@@ -30,7 +31,6 @@ require (
 	github.com/sagernet/netlink v0.0.0-20240612041022-b9a21c07ac6a // indirect
 	github.com/sagernet/nftables v0.3.0-mod.4 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
-	github.com/williamfhe/godivert v0.0.0-20181229124620-a48c5b872c73 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect

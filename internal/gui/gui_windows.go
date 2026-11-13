@@ -96,7 +96,10 @@ type App struct {
 	sysProxy *walk.CheckBox
 
 	sink     *connlog.ChanSink
+	ring     *connlog.Ring
 	stats    *connlog.Stats
+	connTable *walk.TableView
+	connModel *connModel
 	pending  strings.Builder
 	pmu      sync.Mutex
 	paused   bool
@@ -112,7 +115,9 @@ type App struct {
 func Run(cfgPath string, cfg config.Config) error {
 	a := &App{cfgPath: cfgPath, cfg: cfg, model: &serverModel{}}
 	a.sink = connlog.NewChanSink(4096)
+	a.ring = connlog.NewRing(500)
 	a.stats = &connlog.Stats{}
+	a.connModel = &connModel{}
 
 	if err := (MainWindow{
 		AssignTo: &a.mw,
@@ -139,6 +144,10 @@ func Run(cfgPath string, cfg config.Config) error {
 						AssignTo:  &a.pingBtn,
 						Text:      "Test latency",
 						OnClicked: func() { a.testLatency() },
+					},
+					PushButton{
+						Text:      "Settings",
+						OnClicked: func() { a.openSettings() },
 					},
 					PushButton{
 						AssignTo:  &a.pauseBtn,
@@ -179,7 +188,37 @@ func Run(cfgPath string, cfg config.Config) error {
 					Label{AssignTo: &a.status, Text: "idle"},
 				},
 			},
-			TextEdit{AssignTo: &a.logs, ReadOnly: true, VScroll: true},
+			TabWidget{
+				Pages: []TabPage{
+					{
+						Title:  "Log",
+						Layout: VBox{},
+						Children: []Widget{
+							TextEdit{AssignTo: &a.logs, ReadOnly: true, VScroll: true},
+						},
+					},
+					{
+						Title:  "Connections",
+						Layout: VBox{},
+						Children: []Widget{
+							TableView{
+								AssignTo:         &a.connTable,
+								Model:            a.connModel,
+								AlternatingRowBG: true,
+								Columns: []TableViewColumn{
+									{Title: "Time", Width: 90},
+									{Title: "Proto", Width: 60},
+									{Title: "Action", Width: 60},
+									{Title: "Target", Width: 260},
+									{Title: "ms", Width: 60},
+									{Title: "Up", Width: 80},
+									{Title: "Down", Width: 80},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	}).Create(); err != nil {
 		return err
@@ -320,7 +359,7 @@ func (a *App) start() {
 			return len(p), nil
 		}))
 
-		bus := connlog.NewMulti(a.sink, a.stats)
+		bus := connlog.NewMulti(a.sink, a.stats, a.ring)
 		emit := func(e connlog.Event) { bus.Emit(e) }
 
 		socks := &proxy.Socks5{Addr: a.cfg.Local.SocksAddr, Logger: logger, Timeout: timeout, Dialer: up.DialContext, OnEvent: emit}
@@ -397,7 +436,9 @@ func (a *App) testLatency() {
 
 func (a *App) pumpLogs() {
 	t := time.NewTicker(120 * time.Millisecond)
+	connTick := time.NewTicker(700 * time.Millisecond)
 	defer t.Stop()
+	defer connTick.Stop()
 	for {
 		select {
 		case line := <-a.sink.C():
@@ -407,8 +448,20 @@ func (a *App) pumpLogs() {
 			a.pmu.Unlock()
 		case <-t.C:
 			a.flushLogs()
+		case <-connTick.C:
+			a.refreshConns()
 		}
 	}
+}
+
+func (a *App) refreshConns() {
+	if a.connTable == nil || a.ring == nil {
+		return
+	}
+	events := a.ring.Snapshot()
+	a.mw.Synchronize(func() {
+		a.connModel.Reset(events)
+	})
 }
 
 func (a *App) flushLogs() {
@@ -454,6 +507,42 @@ func (a *App) clearLogs() {
 	if a.logs != nil {
 		a.logs.SetText("")
 	}
+}
+
+type connModel struct {
+	walk.TableModelBase
+	items []connlog.Event
+}
+
+func (m *connModel) RowCount() int { return len(m.items) }
+
+func (m *connModel) Value(row, col int) any {
+	if row < 0 || row >= len(m.items) {
+		return ""
+	}
+	e := m.items[row]
+	switch col {
+	case 0:
+		return e.Time.Format("15:04:05")
+	case 1:
+		return e.Proto
+	case 2:
+		return e.Action
+	case 3:
+		return e.Target
+	case 4:
+		return e.DurMs
+	case 5:
+		return e.Up
+	case 6:
+		return e.Down
+	}
+	return ""
+}
+
+func (m *connModel) Reset(items []connlog.Event) {
+	m.items = items
+	m.PublishRowsReset()
 }
 
 type writerFunc func([]byte) (int, error)
