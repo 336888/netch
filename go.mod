@@ -3,6 +3,7 @@ module github.com/netchx/netch-go
 go 1.27
 
 require (
+	github.com/energye/systray v1.0.3
 	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
 	github.com/miekg/dns v1.1.73
 	github.com/sagernet/sing v0.9.6
@@ -16,6 +17,7 @@ require (
 	github.com/florianl/go-nfqueue/v2 v2.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gofrs/uuid/v5 v5.3.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect

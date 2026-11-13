@@ -10,8 +10,65 @@ import (
 	"time"
 )
 
-// handleUDP implements the UDP ASSOCIATE command. It opens a local UDP socket,
-// tells the client its address, then relays datagrams in both directions.
+// udpSession keeps one upstream UDP socket per destination so a game or voice
+// stream does not pay a dial per datagram.
+type udpSession struct {
+	mu    sync.Mutex
+	conns map[string]*udpEntry
+}
+
+type udpEntry struct {
+	conn *net.UDPConn
+	seen time.Time
+}
+
+func newUDPSession() *udpSession {
+	return &udpSession{conns: make(map[string]*udpEntry)}
+}
+
+func (u *udpSession) get(key string, dst *net.UDPAddr) (*net.UDPConn, error) {
+	u.mu.Lock()
+	if e, ok := u.conns[key]; ok {
+		e.seen = time.Now()
+		u.mu.Unlock()
+		return e.conn, nil
+	}
+	u.mu.Unlock()
+
+	conn, err := net.DialUDP("udp", nil, dst)
+	if err != nil {
+		return nil, err
+	}
+	u.mu.Lock()
+	u.conns[key] = &udpEntry{conn: conn, seen: time.Now()}
+	u.mu.Unlock()
+	return conn, nil
+}
+
+// reap closes sockets that have been idle longer than the cutoff.
+func (u *udpSession) reap(idle time.Duration) {
+	cutoff := time.Now().Add(-idle)
+	u.mu.Lock()
+	for k, e := range u.conns {
+		if e.seen.Before(cutoff) {
+			_ = e.conn.Close()
+			delete(u.conns, k)
+		}
+	}
+	u.mu.Unlock()
+}
+
+func (u *udpSession) close() {
+	u.mu.Lock()
+	for k, e := range u.conns {
+		_ = e.conn.Close()
+		delete(u.conns, k)
+	}
+	u.mu.Unlock()
+}
+
+// handleUDP implements the UDP ASSOCIATE command: open a local socket, tell the
+// client its address, then relay datagrams with per-target socket reuse.
 func (s *Socks5) handleUDP(ctx context.Context, c net.Conn) error {
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -25,42 +82,50 @@ func (s *Socks5) handleUDP(ctx context.Context, c net.Conn) error {
 		return err
 	}
 
+	sess := newUDPSession()
+	defer sess.close()
+
 	var clientMu sync.Mutex
 	var clientAddr string
 
-	done := make(chan struct{})
+	stop := make(chan struct{})
 	go func() {
-		defer close(done)
-		buf := make([]byte, 65535)
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
 		for {
-			_ = pc.SetReadDeadline(time.Now().Add(60 * time.Second))
-			n, from, err := pc.ReadFromUDP(buf)
-			if err != nil {
+			select {
+			case <-stop:
 				return
+			case <-t.C:
+				sess.reap(2 * time.Minute)
 			}
-			clientMu.Lock()
-			if clientAddr == "" {
-				clientAddr = from.String()
-			}
-			isClient := from.String() == clientAddr
-			clientMu.Unlock()
-			if !isClient {
-				continue
-			}
-			s.relayUDPOut(pc, buf[:n])
 		}
 	}()
 
-	// Keep the TCP control connection alive; closing it ends the association.
-	buf := make([]byte, 1)
-	_, _ = c.Read(buf)
-	<-done
-	return nil
+	buf := make([]byte, 65535)
+	for {
+		_ = pc.SetReadDeadline(time.Now().Add(90 * time.Second))
+		n, from, rerr := pc.ReadFromUDP(buf)
+		if rerr != nil {
+			close(stop)
+			return nil
+		}
+		clientMu.Lock()
+		if clientAddr == "" {
+			clientAddr = from.String()
+		}
+		isClient := from.String() == clientAddr
+		clientMu.Unlock()
+		if !isClient {
+			continue
+		}
+		s.relayUDPOut(pc, sess, buf[:n])
+	}
 }
 
-// relayUDPOut strips the SOCKS5 UDP header, forwards the payload, and writes
-// the reply back in the same framing.
-func (s *Socks5) relayUDPOut(pc *net.UDPConn, pkt []byte) {
+// relayUDPOut strips the SOCKS5 header, forwards the payload, and writes the
+// reply back in the same framing.
+func (s *Socks5) relayUDPOut(pc *net.UDPConn, sess *udpSession, pkt []byte) {
 	if len(pkt) < 4 {
 		return
 	}
@@ -105,16 +170,18 @@ func (s *Socks5) relayUDPOut(pc *net.UDPConn, pkt []byte) {
 	if err != nil {
 		return
 	}
-	target, err := net.DialUDP("udp", nil, dst)
+	key := dst.String()
+	conn, err := sess.get(key, dst)
 	if err != nil {
 		return
 	}
-	defer target.Close()
 
-	_, _ = target.Write(payload)
-	_ = target.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(payload); err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	reply := make([]byte, 65535)
-	n, err := target.Read(reply)
+	n, err := conn.Read(reply)
 	if err != nil {
 		return
 	}

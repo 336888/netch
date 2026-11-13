@@ -5,6 +5,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -18,13 +19,15 @@ import (
 	"github.com/netchx/netch-go/internal/outbound"
 	"github.com/netchx/netch-go/internal/proxy"
 	"github.com/netchx/netch-go/internal/sysproxy"
+	"github.com/netchx/netch-go/internal/tray"
 )
 
 var modes = []string{"web", "tun", "process", "share"}
 
 type serverModel struct {
 	walk.TableModelBase
-	items []config.Server
+	items   []config.Server
+	latency map[string]string
 }
 
 func (m *serverModel) RowCount() int { return len(m.items) }
@@ -45,13 +48,38 @@ func (m *serverModel) Value(row, col int) any {
 		return s.Port
 	case 4:
 		return s.SNI
+	case 5:
+		if m.latency != nil {
+			if v, ok := m.latency[s.Name]; ok {
+				return v
+			}
+		}
+		return "-"
 	}
 	return ""
 }
 
 func (m *serverModel) Reset(items []config.Server) {
 	m.items = items
+	m.latency = make(map[string]string, len(items))
 	m.PublishRowsReset()
+}
+
+func (m *serverModel) setLatency(name, v string) {
+	if m.latency == nil {
+		m.latency = make(map[string]string)
+	}
+	m.latency[name] = v
+	m.PublishRowChanged(m.index(name))
+}
+
+func (m *serverModel) index(name string) int {
+	for i, s := range m.items {
+		if s.Name == name {
+			return i
+		}
+	}
+	return 0
 }
 
 type App struct {
@@ -74,9 +102,11 @@ type App struct {
 	paused   bool
 	pauseBtn *walk.PushButton
 	clearBtn *walk.PushButton
+	pingBtn  *walk.PushButton
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	quitting bool
 }
 
 func Run(cfgPath string, cfg config.Config) error {
@@ -106,6 +136,11 @@ func Run(cfgPath string, cfg config.Config) error {
 					},
 					HSpacer{},
 					PushButton{
+						AssignTo:  &a.pingBtn,
+						Text:      "Test latency",
+						OnClicked: func() { a.testLatency() },
+					},
+					PushButton{
 						AssignTo:  &a.pauseBtn,
 						Text:      "Pause log",
 						OnClicked: func() { a.togglePause() },
@@ -132,7 +167,8 @@ func Run(cfgPath string, cfg config.Config) error {
 					{Title: "Protocol", Width: 100},
 					{Title: "Address", Width: 200},
 					{Title: "Port", Width: 80},
-					{Title: "SNI", Width: 180},
+					{Title: "SNI", Width: 140},
+					{Title: "Latency", Width: 80},
 				},
 				OnCurrentIndexChanged: func() {},
 			},
@@ -152,8 +188,40 @@ func Run(cfgPath string, cfg config.Config) error {
 	a.model.Reset(cfg.Servers)
 	go a.pumpLogs()
 
+	go tray.Run("Netch", tray.Hooks{
+		Show: func() {
+			a.mw.Synchronize(func() {
+				a.mw.Show()
+				a.mw.Activate()
+			})
+		},
+		Toggle: func() bool {
+			a.mu.Lock()
+			running := a.cancel != nil
+			a.mu.Unlock()
+			if running {
+				a.stop()
+				return false
+			}
+			a.start()
+			return true
+		},
+		Quit: func() {
+			a.quitting = true
+			a.stop()
+			a.mw.Synchronize(func() { a.mw.Close() })
+		},
+		Exit: func() {},
+	})
+
 	a.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		if !a.quitting {
+			*canceled = true
+			a.mw.Hide()
+			return
+		}
 		a.stop()
+		tray.Quit()
 	})
 	a.mw.Run()
 	return nil
@@ -224,6 +292,7 @@ func (a *App) start() {
 	a.mu.Unlock()
 
 	a.btn.SetText("Stop")
+	tray.SetRunning(true)
 	a.setStatus(fmt.Sprintf("running %s via %s", mode, srv.Name))
 	a.appendLog(fmt.Sprintf("start mode=%s server=%s proto=%s", mode, srv.Name, srv.Protocol))
 
@@ -285,6 +354,7 @@ func (a *App) stop() {
 		_ = sysproxy.Disable()
 		a.appendLog("system proxy cleared")
 	}
+	tray.SetRunning(false)
 }
 
 func (a *App) finish() {
@@ -295,6 +365,34 @@ func (a *App) finish() {
 	a.mu.Lock()
 	a.cancel = nil
 	a.mu.Unlock()
+}
+
+func (a *App) testLatency() {
+	if a.pingBtn != nil {
+		a.pingBtn.SetEnabled(false)
+		defer a.pingBtn.SetEnabled(true)
+	}
+	a.appendLog("latency test: " + fmt.Sprint(len(a.cfg.Servers)) + " servers")
+
+	for _, srv := range a.cfg.Servers {
+		srv := srv
+		go func() {
+			if srv.Protocol == "direct" {
+				a.mw.Synchronize(func() { a.model.setLatency(srv.Name, "local") })
+				return
+			}
+			addr := net.JoinHostPort(srv.Address, fmt.Sprint(srv.Port))
+			start := time.Now()
+			conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+			if err != nil {
+				a.mw.Synchronize(func() { a.model.setLatency(srv.Name, "fail") })
+				return
+			}
+			_ = conn.Close()
+			ms := time.Since(start).Milliseconds()
+			a.mw.Synchronize(func() { a.model.setLatency(srv.Name, fmt.Sprintf("%d ms", ms)) })
+		}()
+	}
 }
 
 func (a *App) pumpLogs() {

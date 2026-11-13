@@ -174,7 +174,6 @@ func (s *Socks5) handle(ctx context.Context, c net.Conn) {
 		s.reply(c, dialErrCode(err), netip.AddrPort{})
 		return
 	}
-	_ = action
 	defer up.Close()
 
 	var bnd netip.AddrPort
