@@ -306,13 +306,26 @@ func toPort(v any) (uint16, error) {
 }
 
 func decodeBase64(s string) ([]byte, error) {
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "-", "+")
-	s = strings.ReplaceAll(s, "_", "/")
+	// strip every kind of whitespace first; subscriptions wrap lines
+	s = strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', '\t', ' ':
+			return -1
+		}
+		return r
+	}, s)
+	// url-safe alphabet to standard
+	s = strings.NewReplacer("-", "+", "_", "/").Replace(s)
+	// restore padding
 	if pad := len(s) % 4; pad != 0 {
 		s += strings.Repeat("=", 4-pad)
 	}
-	return base64.StdEncoding.DecodeString(s)
+	dec, err := base64.StdEncoding.DecodeString(s)
+	if err == nil {
+		return dec, nil
+	}
+	// some generators emit raw (unpadded) url-safe strings
+	return base64.RawURLEncoding.DecodeString(strings.TrimRight(s, "="))
 }
 
 func firstNonEmpty(vs ...string) string {

@@ -100,6 +100,7 @@ type App struct {
 	stats    *connlog.Stats
 	connTable *walk.TableView
 	connModel *connModel
+	lastGen   uint64
 	pending  strings.Builder
 	pmu      sync.Mutex
 	paused   bool
@@ -472,7 +473,16 @@ func (a *App) refreshConns() {
 	if a.connTable == nil || a.ring == nil {
 		return
 	}
+	gen := a.ring.Generation()
+	if gen == a.lastGen {
+		return
+	}
+	a.lastGen = gen
+
 	events := a.ring.Snapshot()
+	if len(events) > 300 {
+		events = events[len(events)-300:]
+	}
 	a.mw.Synchronize(func() {
 		a.connModel.Reset(events)
 	})

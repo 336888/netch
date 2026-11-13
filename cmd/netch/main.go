@@ -290,7 +290,7 @@ func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sy
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown")
-		time.Sleep(300 * time.Millisecond)
+		socks.Shutdown(5 * time.Second)
 		return nil
 	case err := <-errCh:
 		return err

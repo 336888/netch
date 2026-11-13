@@ -11,6 +11,7 @@ type Ring struct {
 	buf    []Event
 	head   int
 	filled bool
+	gen    uint64
 }
 
 // NewRing allocates a ring with the given capacity.
@@ -32,6 +33,7 @@ func (r *Ring) Emit(e Event) {
 	if r.head == 0 {
 		r.filled = true
 	}
+	r.gen++
 	r.mu.Unlock()
 }
 
@@ -52,6 +54,14 @@ func (r *Ring) Snapshot() []Event {
 		out = append(out, r.buf[(start+i)%len(r.buf)])
 	}
 	return out
+}
+
+// Generation increments on every write. Callers use it to skip redundant
+// table refreshes.
+func (r *Ring) Generation() uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.gen
 }
 
 // Len reports how many slots are in use.

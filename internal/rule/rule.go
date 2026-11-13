@@ -6,7 +6,25 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
+
+var idnaLookup = idna.New(
+	idna.MapForLookup(),
+	idna.Transitional(false),
+	idna.StrictDomainName(false),
+)
+
+// normalizeDomain folds case, strips the trailing dot and converts IDN labels
+// to punycode so 中文.cn and xn--fiq228c.cn compare equal.
+func normalizeDomain(d string) string {
+	d = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(d)), ".")
+	if ascii, err := idnaLookup.ToASCII(d); err == nil {
+		return strings.ToLower(ascii)
+	}
+	return d
+}
 
 type Action string
 
@@ -91,22 +109,22 @@ func New(rules []Rule) (*Matcher, error) {
 // Match returns the first matching action. When nothing matches, proxy is used
 // so traffic is never silently leaked outside the tunnel.
 func (m *Matcher) Match(meta Meta) (Action, string) {
-	host := strings.ToLower(strings.TrimSuffix(meta.Domain, "."))
+	host := normalizeDomain(meta.Domain)
 	proc := strings.ToLower(meta.Process)
 
 	for _, r := range m.rules {
 		switch r.Type {
 		case TypeDomainSuffix:
-			v := strings.ToLower(strings.TrimPrefix(r.Value, "."))
+			v := normalizeDomain(strings.TrimPrefix(r.Value, "."))
 			if host == v || strings.HasSuffix(host, "."+v) {
 				return r.Action, r.Note
 			}
 		case TypeDomainKeyword:
-			if strings.Contains(host, strings.ToLower(r.Value)) {
+			if strings.Contains(host, normalizeDomain(r.Value)) {
 				return r.Action, r.Note
 			}
 		case TypeDomainFull:
-			if host == strings.ToLower(r.Value) {
+			if host == normalizeDomain(r.Value) {
 				return r.Action, r.Note
 			}
 		case TypeIPCIDR, TypeIPCIDR6:

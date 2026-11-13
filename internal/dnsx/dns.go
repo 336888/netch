@@ -171,21 +171,37 @@ func (s *Server) resolve(r *dns.Msg) (*dns.Msg, error) {
 
 	var lastErr error
 	for _, up := range s.upstreams() {
-		conn, err := s.dialContext(ctx, "udp", up)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		c := &dns.Client{Timeout: s.timeout()}
-		dc := &dns.Conn{Conn: conn, UDPSize: 1232}
-		resp, _, err := c.ExchangeWithConn(r, dc)
-		conn.Close()
-		if err == nil && resp != nil {
+		// truncation or a blocked UDP path both fall back to TCP
+		if resp, err := s.exchangeOn(ctx, "udp", up, r); err == nil && resp != nil {
+			if resp.Truncated {
+				if tresp, terr := s.exchangeOn(ctx, "tcp", up, r); terr == nil {
+					return tresp, nil
+				}
+			}
 			return resp, nil
 		}
-		lastErr = err
+		if resp, err := s.exchangeOn(ctx, "tcp", up, r); err == nil && resp != nil {
+			return resp, nil
+		} else {
+			lastErr = err
+		}
 	}
 	return nil, errors.Join(lastErr, errors.New("dns: all upstreams failed"))
+}
+
+func (s *Server) exchangeOn(ctx context.Context, network, up string, r *dns.Msg) (*dns.Msg, error) {
+	conn, err := s.dialContext(ctx, network, up)
+	if err != nil {
+		return nil, err
+	}
+	c := &dns.Client{Net: network, Timeout: s.timeout()}
+	dc := &dns.Conn{Conn: conn, UDPSize: 1232}
+	resp, _, err := c.ExchangeWithConn(r, dc)
+	_ = conn.Close()
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (s *Server) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {

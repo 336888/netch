@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,7 @@ type Socks5 struct {
 	MaxConns int
 
 	connCount atomic.Int64
+	wg        sync.WaitGroup
 }
 
 func (s *Socks5) ListenAndServe(ctx context.Context) error {
@@ -86,7 +88,24 @@ func (s *Socks5) Serve(ctx context.Context, ln net.Listener) error {
 			continue
 		}
 		backoff = 0
-		go s.handle(ctx, c)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.handle(ctx, c)
+		}()
+	}
+}
+
+// Shutdown waits for in-flight connections to finish, up to timeout.
+func (s *Socks5) Shutdown(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
 	}
 }
 
@@ -151,6 +170,7 @@ func (s *Socks5) handle(ctx context.Context, c net.Conn) {
 		}
 	}()
 
+	// whole handshake must finish inside the timeout; stalls get dropped
 	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 
 	if err := s.handshake(c); err != nil {
