@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-tun"
+	buf "github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 
@@ -123,12 +124,54 @@ func (h *Handler) NewDNSPacket(payload []byte, source M.Socksaddr, destination M
 }
 
 func (h *Handler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
-	// UDP over TUN needs a full NAT table; leave it closed for now so the
-	// caller sees an immediate failure instead of silent blackholing.
+	defer conn.Close()
 	if onClose != nil {
-		onClose(errors.New("tunmode: udp not implemented"))
+		defer onClose(nil)
 	}
-	conn.Close()
+
+	up, err := h.dialer(ctx, "udp", destination.String())
+	if err != nil {
+		return
+	}
+	defer up.Close()
+
+	done := make(chan struct{}, 2)
+
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			b := buf.NewSize(65535)
+			dst, rerr := conn.ReadPacket(b)
+			if rerr != nil {
+				b.Release()
+				return
+			}
+			_, werr := up.Write(b.Bytes())
+			b.Release()
+			if werr != nil {
+				return
+			}
+			_ = dst
+		}
+	}()
+
+	go func() {
+		defer func() { done <- struct{}{} }()
+		raw := make([]byte, 65535)
+		for {
+			_ = up.SetReadDeadline(time.Now().Add(h.udpTimeout))
+			n, rerr := up.Read(raw)
+			if rerr != nil {
+				return
+			}
+			b := buf.As(raw[:n])
+			if werr := conn.WritePacket(b, destination); werr != nil {
+				return
+			}
+		}
+	}()
+
+	<-done
 }
 
 // NewHandler builds a Handler with the given upstream dialer.

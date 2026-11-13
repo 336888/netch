@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/netchx/netch-go/internal/connlog"
@@ -46,6 +47,11 @@ type Socks5 struct {
 	Dialer    func(ctx context.Context, network, addr string) (net.Conn, error)
 	Route     RouteFunc
 	OnEvent   func(connlog.Event)
+
+	// MaxConns caps concurrent client connections. Zero means unlimited.
+	MaxConns int
+
+	connCount atomic.Int64
 }
 
 func (s *Socks5) ListenAndServe(ctx context.Context) error {
@@ -107,6 +113,15 @@ func (s *Socks5) dialer() func(ctx context.Context, network, addr string) (net.C
 
 func (s *Socks5) handle(ctx context.Context, c net.Conn) {
 	defer c.Close()
+
+	if s.MaxConns > 0 {
+		if s.connCount.Load() >= int64(s.MaxConns) {
+			s.log().Warn("socks5 connection limit reached", "limit", s.MaxConns)
+			return
+		}
+	}
+	s.connCount.Add(1)
+	defer s.connCount.Add(-1)
 
 	start := time.Now()
 	var (

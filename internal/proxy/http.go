@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/netchx/netch-go/internal/connlog"
@@ -17,13 +18,52 @@ type HTTP struct {
 	Addr    string
 	Logger  *slog.Logger
 	Timeout time.Duration
-	Dialer  func(ctx context.Context, network, addr string) (net.Conn, error)
 	Route   RouteFunc
 	OnEvent func(connlog.Event)
+
+	once      sync.Once
+	transport *http.Transport
+	server    *http.Server
+}
+
+func (h *HTTP) log() *slog.Logger {
+	if h.Logger == nil {
+		return slog.Default()
+	}
+	return h.Logger
+}
+
+// transportFor returns the shared connection pool. Rebuilding it per request
+// exhausts file descriptors under load.
+func (h *HTTP) transportFor() *http.Transport {
+	h.once.Do(func() {
+		d := h.Timeout
+		if d == 0 {
+			d = 30 * time.Second
+		}
+		h.transport = &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if h.Route != nil {
+					c, _, err := h.Route(ctx, network, addr)
+					return c, err
+				}
+				nd := net.Dialer{Timeout: d, KeepAlive: 30 * time.Second}
+				return nd.DialContext(ctx, network, addr)
+			},
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          128,
+			MaxIdleConnsPerHost:   8,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			DisableCompression:    false,
+		}
+	})
+	return h.transport
 }
 
 func (h *HTTP) ListenAndServe(ctx context.Context) error {
-	srv := &http.Server{
+	h.server = &http.Server{
 		Addr:              h.Addr,
 		Handler:           http.HandlerFunc(h.handle),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -35,40 +75,24 @@ func (h *HTTP) ListenAndServe(ctx context.Context) error {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutCtx)
+		_ = h.server.Shutdown(shutCtx)
+		if h.transport != nil {
+			h.transport.CloseIdleConnections()
+		}
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := h.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("http proxy %s: %w", h.Addr, err)
 	}
 	return nil
 }
 
-func (h *HTTP) log() *slog.Logger {
-	if h.Logger == nil {
-		return slog.Default()
-	}
-	return h.Logger
-}
-
-func (h *HTTP) dial() func(ctx context.Context, network, addr string) (net.Conn, error) {
-	if h.Dialer != nil {
-		return h.Dialer
-	}
-	d := h.Timeout
-	if d == 0 {
-		d = 30 * time.Second
-	}
-	nd := net.Dialer{Timeout: d, KeepAlive: 30 * time.Second}
-	return nd.DialContext
-}
-
 func (h *HTTP) handle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodConnect {
-		h.forward(w, r)
+	if r.Method == http.MethodConnect {
+		h.tunnel(w, r)
 		return
 	}
-	h.tunnel(w, r)
+	h.forward(w, r)
 }
 
 func (h *HTTP) tunnel(w http.ResponseWriter, r *http.Request) {
@@ -81,14 +105,17 @@ func (h *HTTP) tunnel(w http.ResponseWriter, r *http.Request) {
 	if h.Route != nil {
 		up, action, err = h.Route(r.Context(), "tcp", r.Host)
 	} else {
-		up, err = h.dial()(r.Context(), "tcp", r.Host)
+		d := h.Timeout
+		if d == 0 {
+			d = 30 * time.Second
+		}
+		nd := net.Dialer{Timeout: d, KeepAlive: 30 * time.Second}
+		up, err = nd.DialContext(r.Context(), "tcp", r.Host)
 	}
 	if err != nil {
-		if h.OnEvent != nil {
-			h.OnEvent(connlog.Event{Time: start, Proto: "http", Action: "fail", Target: r.Host, Dur: time.Since(start), DurMs: time.Since(start).Milliseconds(), Err: err.Error()})
-		}
-		h.log().Debug("http connect", "host", r.Host, "err", err)
-		http.Error(w, "connection failed", http.StatusBadGateway)
+		h.emit(connlog.Event{Time: start, Proto: "http", Action: "fail", Target: r.Host,
+			Dur: time.Since(start), DurMs: time.Since(start).Milliseconds(), Err: err.Error()})
+		http.Error(w, "connection failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer up.Close()
@@ -107,15 +134,19 @@ func (h *HTTP) tunnel(w http.ResponseWriter, r *http.Request) {
 	if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
 	}
+
 	sent, recv := Relay(client, up)
-	if h.OnEvent != nil {
-		h.OnEvent(connlog.Event{Time: start, Proto: "http", Action: action, Target: r.Host, Up: sent, Down: recv, Dur: time.Since(start), DurMs: time.Since(start).Milliseconds()})
-	}
+	h.emit(connlog.Event{
+		Time: start, Proto: "http", Action: action, Target: r.Host,
+		Up: sent, Down: recv,
+		Dur: time.Since(start), DurMs: time.Since(start).Milliseconds(),
+	})
 	h.log().Debug("http tunnel done", "host", r.Host, "sent", sent, "recv", recv)
 }
 
 func (h *HTTP) forward(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+
 	outReq := r.Clone(r.Context())
 	outReq.RequestURI = ""
 	if outReq.URL.Scheme == "" {
@@ -125,23 +156,11 @@ func (h *HTTP) forward(w http.ResponseWriter, r *http.Request) {
 		outReq.URL.Host = r.Host
 	}
 
-	transport := &http.Transport{
-		DialContext:           h.dial(),
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          64,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	defer transport.CloseIdleConnections()
-
-	resp, err := transport.RoundTrip(outReq)
+	resp, err := h.transportFor().RoundTrip(outReq)
 	if err != nil {
-		if h.OnEvent != nil {
-			h.OnEvent(connlog.Event{Time: start, Proto: "http", Action: "fail", Target: outReq.URL.Host, Dur: time.Since(start), DurMs: time.Since(start).Milliseconds(), Err: err.Error()})
-		}
-		h.log().Debug("http forward", "url", outReq.URL.String(), "err", err)
-		http.Error(w, "upstream failed", http.StatusBadGateway)
+		h.emit(connlog.Event{Time: start, Proto: "http", Action: "fail", Target: outReq.URL.Host,
+			Dur: time.Since(start), DurMs: time.Since(start).Milliseconds(), Err: err.Error()})
+		http.Error(w, "upstream failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -153,7 +172,16 @@ func (h *HTTP) forward(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	n, _ := io.Copy(w, resp.Body)
+
+	h.emit(connlog.Event{
+		Time: start, Proto: "http", Action: "proxy", Target: outReq.URL.Host,
+		Down: n,
+		Dur:  time.Since(start), DurMs: time.Since(start).Milliseconds(),
+	})
+}
+
+func (h *HTTP) emit(e connlog.Event) {
 	if h.OnEvent != nil {
-		h.OnEvent(connlog.Event{Time: start, Proto: "http", Action: "proxy", Target: outReq.URL.Host, Down: n, Dur: time.Since(start), DurMs: time.Since(start).Milliseconds()})
+		h.OnEvent(e)
 	}
 }

@@ -57,6 +57,7 @@ type Local struct {
 	SocksAddr string `json:"socks_addr"`
 	HTTPAddr  string `json:"http_addr"`
 	AllowLAN  bool   `json:"allow_lan"`
+	MaxConns  int    `json:"max_conns,omitempty"`
 }
 
 type Tun struct {

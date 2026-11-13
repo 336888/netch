@@ -362,8 +362,22 @@ func (a *App) start() {
 		bus := connlog.NewMulti(a.sink, a.stats, a.ring)
 		emit := func(e connlog.Event) { bus.Emit(e) }
 
-		socks := &proxy.Socks5{Addr: a.cfg.Local.SocksAddr, Logger: logger, Timeout: timeout, Dialer: up.DialContext, OnEvent: emit}
-		httpP := &proxy.HTTP{Addr: a.cfg.Local.HTTPAddr, Logger: logger, Timeout: timeout, Dialer: up.DialContext, OnEvent: emit}
+		socks := &proxy.Socks5{
+			Addr:     a.cfg.Local.SocksAddr,
+			Logger:   logger,
+			Timeout:  timeout,
+			Dialer:   up.DialContext,
+			Route:    proxy.DirectRoute(up.DialContext),
+			OnEvent:  emit,
+			MaxConns: a.cfg.Local.MaxConns,
+		}
+		httpP := &proxy.HTTP{
+			Addr:    a.cfg.Local.HTTPAddr,
+			Logger:  logger,
+			Timeout: timeout,
+			Route:   proxy.DirectRoute(up.DialContext),
+			OnEvent: emit,
+		}
 
 		errCh := make(chan error, 2)
 		go func() { errCh <- socks.ListenAndServe(ctx) }()

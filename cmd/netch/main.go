@@ -251,15 +251,15 @@ func run(cfgPath, modeOverride, serverOverride, levelOverride, subSrc string, sy
 		Addr:    cfg.Local.SocksAddr,
 		Logger:  logger,
 		Timeout: timeout,
-		Dialer:  upstream.DialContext,
-		Route:   routeFn,
-		OnEvent: emit,
+		Dialer:   upstream.DialContext,
+		Route:    routeFn,
+		OnEvent:  emit,
+		MaxConns: cfg.Local.MaxConns,
 	}
 	httpP := &proxy.HTTP{
 		Addr:    cfg.Local.HTTPAddr,
 		Logger:  logger,
 		Timeout: timeout,
-		Dialer:  upstream.DialContext,
 		Route:   routeFn,
 		OnEvent: emit,
 	}

@@ -1,0 +1,6 @@
+[
+  { "type": "domain-suffix", "value": "qq.com", "action": "direct", "note": "qq" },
+  { "type": "domain-suffix", "value": "ipify.org", "action": "direct", "note": "new" },
+  { "type": "ip-cidr", "value": "127.0.0.0/8", "action": "direct", "note": "loopback" },
+  { "type": "final", "action": "proxy", "note": "fallback" }
+]
