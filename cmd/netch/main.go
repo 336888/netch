@@ -53,13 +53,17 @@ func main() {
 		return
 	}
 
-	if *useGUI {
+	// Windows users double-click the exe; that means no args at all.
+	// Treat that as "open the GUI" so the app does not exit on a missing config.
+	bareLaunch := len(os.Args) == 1 && runtime.GOOS == "windows"
+
+	if *useGUI || bareLaunch {
 		cfg, err := config.Load(*cfgPath)
 		if err != nil {
 			cfg = config.Default()
 		}
 		if err := gui.Run(*cfgPath, cfg); err != nil {
-			fmt.Fprintln(os.Stderr, "gui:", err)
+			gui.ShowError("Netch Go", err)
 			os.Exit(1)
 		}
 		return

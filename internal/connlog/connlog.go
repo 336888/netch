@@ -73,9 +73,9 @@ func (s *WriterSink) Emit(e Event) {
 	if e.Err != "" {
 		errPart = " err=" + e.Err
 	}
-	fmt.Fprintf(s.w, "%s %-8s %-6s %-40s %6dms up=%-7d down=%-7d%s%s\n",
+	fmt.Fprintf(s.w, "%s %-8s %-6s %-40s %6d毫秒 上行=%-7d 下行=%-7d%s%s\n",
 		e.Time.Format("15:04:05.000"),
-		e.Proto, e.Action, e.Target,
+		e.Proto, actionLabel(e.Action), e.Target,
 		e.DurMs, e.Up, e.Down, rule, errPart)
 }
 
@@ -94,8 +94,8 @@ func NewChanSink(size int) *ChanSink {
 }
 
 func (c *ChanSink) Emit(e Event) {
-	line := fmt.Sprintf("%s %-8s %-6s %-40s %6dms up=%-7d down=%-7d",
-		e.Time.Format("15:04:05.000"), e.Proto, e.Action, e.Target, e.DurMs, e.Up, e.Down)
+	line := fmt.Sprintf("%s %-8s %-6s %-40s %6d毫秒 上行=%-7d 下行=%-7d",
+		e.Time.Format("15:04:05.000"), e.Proto, actionLabel(e.Action), e.Target, e.DurMs, e.Up, e.Down)
 	if e.Err != "" {
 		line += " err=" + e.Err
 	}
@@ -140,4 +140,20 @@ func (s *Stats) Emit(e Event) {
 
 func (s *Stats) Snapshot() (total, proxied, direct, rejected, failed, up, down int64) {
 	return s.Total.Load(), s.Proxied.Load(), s.Direct.Load(), s.Rejected.Load(), s.Failed.Load(), s.Up.Load(), s.Down.Load()
+}
+
+// actionLabel renders the action in Chinese for the text sink. JSON keeps the
+// raw value so scripts stay stable.
+func actionLabel(a string) string {
+	switch a {
+	case "proxy":
+		return "代理"
+	case "direct":
+		return "直连"
+	case "reject":
+		return "拒绝"
+	case "fail":
+		return "失败"
+	}
+	return a
 }

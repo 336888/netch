@@ -32,6 +32,13 @@ func New(s config.Server, timeout time.Duration) (Dialer, error) {
 	case config.ProtoVMess:
 		return newVMess(s, timeout)
 	case config.ProtoVLESS:
+		// REALITY nodes provisioned for Xray reject sing-box's ClientHello.
+		// If an xray binary is present, prefer it for those nodes.
+		if s.Security == "reality" && s.PublicKey != "" {
+			if _, ok := Available(); ok {
+				return newXrayBackend(s, timeout)
+			}
+		}
 		return newVLESS(s, timeout)
 	case config.ProtoTrojan:
 		return newTrojan(s, timeout)

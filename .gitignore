@@ -1,9 +1,14 @@
 /netch
 /netch-gui.exe
+/netch-console.exe
+/xray
+/xray.exe
 /bin/
+/dist/
+/.gotmp/
 *.exe
 *.log
 .gopath/
 config.json
-dist/
+reality.json
 cmd/netch/rsrc_windows_amd64.syso

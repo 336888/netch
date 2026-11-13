@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -61,9 +62,9 @@ func (m *serverModel) Value(row, col int) any {
 		if m.health != nil {
 			if st, ok := m.health[s.Name]; ok {
 				if st.OK {
-					return "up"
+					return "在线"
 				}
-				return "down"
+				return "离线"
 			}
 		}
 		return "-"
@@ -136,7 +137,31 @@ type App struct {
 	quitting bool
 }
 
-func Run(cfgPath string, cfg config.Config) error {
+// ShowError pops a message box so failures are visible in a windowsgui build,
+// where stderr goes nowhere.
+func ShowError(title string, err error) {
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	if len(msg) > 2000 {
+		msg = msg[:2000] + "..."
+	}
+	_ = walk.MsgBox(nil, title, msg, walk.MsgBoxIconError)
+}
+
+func Run(cfgPath string, cfg config.Config) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("%v\n\n%s", r, debug.Stack())
+			if len(msg) > 4000 {
+				msg = msg[:4000]
+			}
+			_ = walk.MsgBox(nil, "Netch Go 启动失败", msg, walk.MsgBoxIconError)
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
 	a := &App{cfgPath: cfgPath, cfg: cfg, model: &serverModel{}}
 	a.sink = connlog.NewChanSink(4096)
 	a.ring = connlog.NewRing(500)
@@ -145,7 +170,7 @@ func Run(cfgPath string, cfg config.Config) error {
 
 	if err := (MainWindow{
 		AssignTo: &a.mw,
-		Title:    "Netch",
+		Title:    "Netch Go",
 		MinSize:  Size{Width: 760, Height: 560},
 		Size:     Size{Width: 880, Height: 640},
 		Layout:   VBox{},
@@ -153,7 +178,7 @@ func Run(cfgPath string, cfg config.Config) error {
 			Composite{
 				Layout: HBox{},
 				Children: []Widget{
-					Label{Text: "Mode:"},
+					Label{Text: "模式："},
 					ComboBox{
 						AssignTo:     &a.modeBox,
 						Model:        modes,
@@ -161,31 +186,31 @@ func Run(cfgPath string, cfg config.Config) error {
 					},
 					CheckBox{
 						AssignTo: &a.sysProxy,
-						Text:     "Set system proxy",
+						Text:     "设置系统代理",
 					},
 					HSpacer{},
 					PushButton{
 						AssignTo:  &a.pingBtn,
-						Text:      "Test latency",
+						Text:      "测延迟",
 						OnClicked: func() { a.testLatency() },
 					},
 					PushButton{
-						Text:      "Settings",
+						Text:      "设置",
 						OnClicked: func() { a.openSettings() },
 					},
 					PushButton{
 						AssignTo:  &a.pauseBtn,
-						Text:      "Pause log",
+						Text:      "暂停日志",
 						OnClicked: func() { a.togglePause() },
 					},
 					PushButton{
 						AssignTo:  &a.clearBtn,
-						Text:      "Clear",
+						Text:      "清空",
 						OnClicked: func() { a.clearLogs() },
 					},
 					PushButton{
 						AssignTo:  &a.btn,
-						Text:      "Start",
+						Text:      "启动",
 						OnClicked: func() { a.toggle() },
 					},
 				},
@@ -196,34 +221,34 @@ func Run(cfgPath string, cfg config.Config) error {
 				AlternatingRowBG:      true,
 				ColumnsOrderable:      true,
 				Columns: []TableViewColumn{
-					{Title: "Name", Width: 180},
-					{Title: "Protocol", Width: 100},
-					{Title: "Address", Width: 200},
-					{Title: "Port", Width: 80},
+					{Title: "名称", Width: 180},
+					{Title: "协议", Width: 100},
+					{Title: "地址", Width: 200},
+					{Title: "端口", Width: 80},
 					{Title: "SNI", Width: 140},
-					{Title: "Latency", Width: 80},
-					{Title: "Status", Width: 70},
+					{Title: "延迟", Width: 80},
+					{Title: "状态", Width: 70},
 				},
 				OnCurrentIndexChanged: func() {},
 			},
 			Composite{
 				Layout: HBox{},
 				Children: []Widget{
-					Label{Text: "Status:"},
-					Label{AssignTo: &a.status, Text: "idle"},
+					Label{Text: "状态："},
+					Label{AssignTo: &a.status, Text: "空闲"},
 				},
 			},
 			TabWidget{
 				Pages: []TabPage{
 					{
-						Title:  "Log",
+						Title:  "日志",
 						Layout: VBox{},
 						Children: []Widget{
 							TextEdit{AssignTo: &a.logs, ReadOnly: true, VScroll: true},
 						},
 					},
 					{
-						Title:  "Connections",
+						Title:  "连接",
 						Layout: VBox{},
 						Children: []Widget{
 							TableView{
@@ -231,13 +256,13 @@ func Run(cfgPath string, cfg config.Config) error {
 								Model:            a.connModel,
 								AlternatingRowBG: true,
 								Columns: []TableViewColumn{
-									{Title: "Time", Width: 90},
-									{Title: "Proto", Width: 60},
-									{Title: "Action", Width: 60},
-									{Title: "Target", Width: 260},
-									{Title: "ms", Width: 60},
-									{Title: "Up", Width: 80},
-									{Title: "Down", Width: 80},
+									{Title: "时间", Width: 90},
+									{Title: "协议", Width: 60},
+									{Title: "动作", Width: 60},
+									{Title: "目标", Width: 260},
+									{Title: "毫秒", Width: 60},
+									{Title: "上行", Width: 80},
+									{Title: "下行", Width: 80},
 								},
 							},
 						},
@@ -346,7 +371,7 @@ func (a *App) selected() (config.Server, error) {
 func (a *App) start() {
 	srv, err := a.selected()
 	if err != nil {
-		a.appendLog("select: " + err.Error())
+		a.appendLog("选择节点：" + err.Error())
 		return
 	}
 	mode := a.cfg.Mode
@@ -359,17 +384,17 @@ func (a *App) start() {
 	a.cancel = cancel
 	a.mu.Unlock()
 
-	a.btn.SetText("Stop")
+	a.btn.SetText("停止")
 	tray.SetRunning(true)
-	a.setStatus(fmt.Sprintf("running %s via %s", mode, srv.Name))
-	a.appendLog(fmt.Sprintf("start mode=%s server=%s proto=%s", mode, srv.Name, srv.Protocol))
+	a.setStatus(fmt.Sprintf("运行中 · %s · %s", mode, srv.Name))
+	a.appendLog(fmt.Sprintf("启动 · 模式 %s · 节点 %s · 协议 %s", mode, srv.Name, srv.Protocol))
 
 	if a.sysProxy != nil && a.sysProxy.Checked() {
 		ep := sysproxy.Endpoint{HTTP: a.cfg.Local.HTTPAddr, Socks: a.cfg.Local.SocksAddr}
 		if err := sysproxy.Enable(ep); err != nil {
-			a.appendLog("sysproxy: " + err.Error())
+			a.appendLog("系统代理：" + err.Error())
 		} else {
-			a.appendLog("system proxy set: " + ep.HTTP)
+			a.appendLog("已设置系统代理 · " + ep.HTTP)
 		}
 	}
 
@@ -377,7 +402,7 @@ func (a *App) start() {
 		timeout := a.cfg.Timeout.Std()
 		up, err := outbound.New(srv, timeout)
 		if err != nil {
-			a.appendLog("outbound: " + err.Error())
+			a.appendLog("出站失败：" + err.Error())
 			a.finish()
 			return
 		}
@@ -416,7 +441,7 @@ func (a *App) start() {
 		case <-ctx.Done():
 		case err := <-errCh:
 			if err != nil {
-				a.appendLog("proxy: " + err.Error())
+				a.appendLog("代理错误：" + err.Error())
 			}
 		}
 		a.finish()
@@ -430,19 +455,19 @@ func (a *App) stop() {
 	a.mu.Unlock()
 	if c != nil {
 		c()
-		a.appendLog("stop requested")
+		a.appendLog("请求停止")
 	}
 	if a.sysProxy != nil && a.sysProxy.Checked() {
 		_ = sysproxy.Disable()
-		a.appendLog("system proxy cleared")
+		a.appendLog("已清除系统代理")
 	}
 	tray.SetRunning(false)
 }
 
 func (a *App) finish() {
 	a.mw.Synchronize(func() {
-		a.btn.SetText("Start")
-		a.status.SetText("idle")
+		a.btn.SetText("启动")
+		a.status.SetText("空闲")
 	})
 	a.mu.Lock()
 	a.cancel = nil
@@ -454,25 +479,25 @@ func (a *App) testLatency() {
 		a.pingBtn.SetEnabled(false)
 		defer a.pingBtn.SetEnabled(true)
 	}
-	a.appendLog("latency test: " + fmt.Sprint(len(a.cfg.Servers)) + " servers")
+	a.appendLog(fmt.Sprintf("开始测延迟，共 %d 个节点", len(a.cfg.Servers)))
 
 	for _, srv := range a.cfg.Servers {
 		srv := srv
 		go func() {
 			if srv.Protocol == "direct" {
-				a.mw.Synchronize(func() { a.model.setLatency(srv.Name, "local") })
+				a.mw.Synchronize(func() { a.model.setLatency(srv.Name, "本地") })
 				return
 			}
 			addr := net.JoinHostPort(srv.Address, fmt.Sprint(srv.Port))
 			start := time.Now()
 			conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 			if err != nil {
-				a.mw.Synchronize(func() { a.model.setLatency(srv.Name, "fail") })
+				a.mw.Synchronize(func() { a.model.setLatency(srv.Name, "失败") })
 				return
 			}
 			_ = conn.Close()
 			ms := time.Since(start).Milliseconds()
-			a.mw.Synchronize(func() { a.model.setLatency(srv.Name, fmt.Sprintf("%d ms", ms)) })
+			a.mw.Synchronize(func() { a.model.setLatency(srv.Name, fmt.Sprintf("%d 毫秒", ms)) })
 		}()
 	}
 }
@@ -546,9 +571,9 @@ func (a *App) togglePause() {
 	paused := a.paused
 	a.pmu.Unlock()
 	if paused {
-		a.pauseBtn.SetText("Resume log")
+		a.pauseBtn.SetText("继续日志")
 	} else {
-		a.pauseBtn.SetText("Pause log")
+		a.pauseBtn.SetText("暂停日志")
 	}
 }
 
@@ -579,7 +604,7 @@ func (m *connModel) Value(row, col int) any {
 	case 1:
 		return e.Proto
 	case 2:
-		return e.Action
+		return actionLabel(e.Action)
 	case 3:
 		return e.Target
 	case 4:
@@ -600,3 +625,17 @@ func (m *connModel) Reset(items []connlog.Event) {
 type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+func actionLabel(a string) string {
+	switch a {
+	case "proxy":
+		return "代理"
+	case "direct":
+		return "直连"
+	case "reject":
+		return "拒绝"
+	case "fail":
+		return "失败"
+	}
+	return a
+}

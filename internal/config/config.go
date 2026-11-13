@@ -43,6 +43,13 @@ type Server struct {
 	UUID     string `json:"uuid,omitempty"`
 	SNI      string `json:"sni,omitempty"`
 	Network  string `json:"network,omitempty"`
+
+	// REALITY (VLESS)
+	PublicKey   string `json:"public_key,omitempty"`
+	ShortID     string `json:"short_id,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Flow        string `json:"flow,omitempty"`
+	Security    string `json:"security,omitempty"`
 }
 
 func (s Server) Endpoint() (netip.AddrPort, error) {

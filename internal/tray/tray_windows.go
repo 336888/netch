@@ -32,13 +32,13 @@ func Run(title string, h Hooks) {
 		systray.SetTitle(title)
 		systray.SetTooltip(title)
 
-		mShow := systray.AddMenuItem("Show window", "Bring the main window to front")
+		mShow := systray.AddMenuItem("显示窗口", "把主窗口调到最前")
 		systray.AddSeparator()
-		toggleItem = systray.AddMenuItem("Start", "Start or stop the proxy")
-		statusItem = systray.AddMenuItem("Status: idle", "Current state")
+		toggleItem = systray.AddMenuItem("启动", "启动或停止代理")
+		statusItem = systray.AddMenuItem("状态：空闲", "当前状态")
 		statusItem.Disable()
 		systray.AddSeparator()
-		mQuit := systray.AddMenuItem("Quit", "Stop the proxy and exit")
+		mQuit := systray.AddMenuItem("退出", "停止代理并退出程序")
 
 		mShow.Click(func() {
 			if h.Show != nil {
@@ -51,11 +51,11 @@ func Run(title string, h Hooks) {
 				return
 			}
 			if running := h.Toggle(); running {
-				toggleItem.SetTitle("Stop")
-				statusItem.SetTitle("Status: running")
+				toggleItem.SetTitle("停止")
+				statusItem.SetTitle("状态：运行中")
 			} else {
-				toggleItem.SetTitle("Start")
-				statusItem.SetTitle("Status: idle")
+				toggleItem.SetTitle("启动")
+				statusItem.SetTitle("状态：空闲")
 			}
 		})
 
@@ -78,11 +78,11 @@ func SetRunning(running bool) {
 		return
 	}
 	if running {
-		toggleItem.SetTitle("Stop")
-		statusItem.SetTitle("Status: running")
+		toggleItem.SetTitle("停止")
+		statusItem.SetTitle("状态：运行中")
 	} else {
-		toggleItem.SetTitle("Start")
-		statusItem.SetTitle("Status: idle")
+		toggleItem.SetTitle("启动")
+		statusItem.SetTitle("状态：空闲")
 	}
 }
 

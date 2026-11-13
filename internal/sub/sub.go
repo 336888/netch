@@ -183,13 +183,18 @@ func parseVLESS(rest string) (config.Server, error) {
 		name = u.Hostname()
 	}
 	return config.Server{
-		Name:     name,
-		Protocol: config.ProtoVLESS,
-		Address:  u.Hostname(),
-		Port:     port,
-		UUID:     u.User.Username(),
-		SNI:      sni,
-		Network:  firstNonEmpty(q.Get("type"), "tcp"),
+		Name:        name,
+		Protocol:    config.ProtoVLESS,
+		Address:     u.Hostname(),
+		Port:        port,
+		UUID:        u.User.Username(),
+		SNI:         sni,
+		Network:     firstNonEmpty(q.Get("type"), "tcp"),
+		Security:    q.Get("security"),
+		PublicKey:   q.Get("pbk"),
+		ShortID:     q.Get("sid"),
+		Fingerprint: firstNonEmpty(q.Get("fp"), "chrome"),
+		Flow:        q.Get("flow"),
 	}, nil
 }
 
